@@ -1,6 +1,35 @@
 services:
+  # --------------------
+  # RabbitMQ (DLQ monitoring via UI)
+  # --------------------
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+    ports:
+      - "15672:15672"   # RabbitMQ UI
+    networks:
+      - miro-backend
+
+  # --------------------
+  # Redis
+  # --------------------
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - miro-backend
+
+  # --------------------
+  # Postgres 
+  # --------------------
   postgres:
     image: postgres:15-alpine
+    container_name: postgres
     restart: unless-stopped
     env_file:
       - .env
@@ -8,110 +37,55 @@ services:
       - pg_data:/var/lib/postgresql/data
     networks:
       - miro-backend
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    networks:
-      - miro-backend
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    restart: unless-stopped
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS}
+  # --------------------
+  # Loki (log storage)
+  # --------------------
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "15672:15672" 
+      - "3100:3100"
     networks:
       - miro-backend
 
-  mongo:
-    image: mongo:6.0
-    restart: unless-stopped
+  # --------------------
+  # Promtail (log collector)
+  # --------------------
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
     volumes:
-      - mongo_data:/data/db
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./promtail-config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
     networks:
       - miro-backend
-    healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    depends_on:
+      - loki
 
-  # Exporters for Prometheus 
-  postgres_exporter:
-   image: prometheuscommunity/postgres-exporter
-   env_file:
-    - .env
-   networks:
-    - miro-backend
-   depends_on:
-    - postgres
-
-  redis_exporter:
-   image: oliver006/redis_exporter
-   command: ["--redis.addr=redis:6379"]
-   networks:
-    - miro-backend
-   depends_on:
-    - redis
-
-  mongodb_exporter:
-   image: bitnami/mongodb-exporter
-   environment:
-    MONGODB_URI: mongodb://mongo:27017
-   networks:
-    - miro-backend
-   depends_on:
-    - mongo
-
-  # rabbitmq_exporter:
-  #  image: rabbitmq:3-management
-  #  environment:
-  #   RABBIT_URL: http://rabbitmq:15672
-  #   RABBIT_USER: ${RABBITMQ_USER}
-  #   RABBIT_PASSWORD: ${RABBITMQ_PASS}
-  #  networks:
-  #   - miro-backend
-  #  depends_on:
-  #   - rabbitmq
-
-
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
-    networks:
-      - miro-backend
-
+  # --------------------
+  # Grafana (log viewer)
+  # --------------------
   grafana:
     image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
     ports:
       - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
     networks:
       - miro-backend
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
-      - prometheus
+      - loki
 
 volumes:
   pg_data:
-  mongo_data:
 
 networks:
   miro-backend:
     name: miro-backend
+    driver: bridge
